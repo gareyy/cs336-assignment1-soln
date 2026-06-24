@@ -42,6 +42,7 @@ def get_tokenizer_from_vocab_merges_path(
     special_tokens: list[str] | None = None,
 ):
     gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
+    print(str(gpt2_byte_decoder).encode())
     with open(vocab_path) as vocab_f:
         gpt2_vocab = json.load(vocab_f)
     gpt2_bpe_merges = []
@@ -66,7 +67,7 @@ def get_tokenizer_from_vocab_merges_path(
 
     merges = [
         (
-            bytes([gpt2_byte_decoder[token] for token in merge_token_1]),
+            bytes([gpt2_byte_decoder[token] for token in merge_token_1]), # TODO: some bug here
             bytes([gpt2_byte_decoder[token] for token in merge_token_2]),
         )
         for merge_token_1, merge_token_2 in gpt2_bpe_merges
