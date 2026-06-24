@@ -200,7 +200,7 @@ class Tokeniser:
                     lowest_pair_vocab_idx = k
                     break
             tokens = merge_new_token(tokens, lowest_pair, lowest_pair_vocab_idx)
-        return tokens
+        return list(tokens)
 
     def encode(self, text:str) -> list[int]:
         if not self.special_tokens:
@@ -233,12 +233,10 @@ def files_to_vocab_merges(vocab_filepath: str, merges_filepath: str) -> tuple[di
 if __name__ == "__main__":
     #voc, mer = train_bpe("../data/TinyStoriesV2-GPT4-valid.txt", 10000, ["<|endoftext|>"])
     #bpe_to_file(voc, "tinystories_voc", mer, "tinystories_mer")
-    voc, mer = files_to_vocab_merges("tinystories_voc", "tinystories_mer")
-    tokeniser = Tokeniser(voc, mer, ["<|endoftext|>"])
-    work = "<|endoftext|>cock and🍆🍆 balls<|endoftext|>🔥🔥cock and ass<|endoftext|>"
-    print(work)
-    print(work.encode())
+    #work = "<|endoftext|>cock and🍆🍆 balls<|endoftext|>🔥🔥cock and ass<|endoftext|>"
+    #work = "<|endoftext|>\n<|endoftext|>\n\n\n"
+    work = "\n<|endoftext|>\n<|endoftext|>\n\n\nasshole\n\n"
     a = tokeniser.encode(work)
-    print(a)
     york = tokeniser.decode(a)
     assert york.encode() == work.encode()
+    print("great success")

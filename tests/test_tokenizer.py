@@ -12,8 +12,6 @@ import tiktoken
 from .adapters import get_tokenizer
 from .common import FIXTURES_PATH, gpt2_bytes_to_unicode
 
-VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
-MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
 
 def memory_limit(max_mem):
@@ -35,6 +33,8 @@ def memory_limit(max_mem):
 
     return decorator
 
+VOCAB_PATH = FIXTURES_PATH / "gpt2_vocab.json"
+MERGES_PATH = FIXTURES_PATH / "gpt2_merges.txt"
 
 def get_tokenizer_from_vocab_merges_path(
     vocab_path: str | os.PathLike,
@@ -42,11 +42,10 @@ def get_tokenizer_from_vocab_merges_path(
     special_tokens: list[str] | None = None,
 ):
     gpt2_byte_decoder = {v: k for k, v in gpt2_bytes_to_unicode().items()}
-    print(str(gpt2_byte_decoder).encode())
-    with open(vocab_path) as vocab_f:
+    with open(vocab_path, "r", encoding="utf-8") as vocab_f:
         gpt2_vocab = json.load(vocab_f)
     gpt2_bpe_merges = []
-    with open(merges_path) as f:
+    with open(merges_path, "r", encoding="utf-8") as f:
         for line in f:
             cleaned_line = line.rstrip()
             if cleaned_line and len(cleaned_line.split(" ")) == 2:
@@ -67,7 +66,7 @@ def get_tokenizer_from_vocab_merges_path(
 
     merges = [
         (
-            bytes([gpt2_byte_decoder[token] for token in merge_token_1]), # TODO: some bug here
+            bytes([gpt2_byte_decoder[token] for token in merge_token_1]),
             bytes([gpt2_byte_decoder[token] for token in merge_token_2]),
         )
         for merge_token_1, merge_token_2 in gpt2_bpe_merges
