@@ -54,13 +54,14 @@ def find_chunk_boundaries(
 def read_chunk(input_path: str | os.PathLike, start:int, end:int, special_tokens:list[str]):
     print(f"Reading from {start} to {end}")
     with open(input_path, "rb") as f:
+        f.seek(start)
         chunk = f.read(end-start).decode("utf-8", errors="ignore")
         pieces = re.split("|".join([re.escape(p) for p in special_tokens]), chunk)
         pretokens = [pt.group() for piece in pieces for pt in re.finditer(PAT, piece)]
     print(f"Done from {start} to {end}")
     return Counter(pretokens)
 
-def get_pretoken_counts(input_path: str | os.PathLike, special_tokens: list[str]) -> dict[tuple[bytes, ...], int]:
+def get_pretoken_counts(input_path: str | os.PathLike, special_tokens: list[str]) -> dict[tuple[int, ...], int]:
     num_processes = 8
     with open(input_path, "rb") as f:
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
@@ -72,7 +73,7 @@ def get_pretoken_counts(input_path: str | os.PathLike, special_tokens: list[str]
     for future in concurrents[1:]:
         tocombine = future.result()
         pretoken_counts += tocombine
-    return {tuple(bytes([b]) for b in pt.encode()): v for pt, v in pretoken_counts.items()}
+    return {tuple(pt.encode()): v for pt, v in pretoken_counts.items()}
 
 def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: list[str]) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     # init vocab
@@ -98,14 +99,13 @@ def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: li
         if len(pair_freq) == 0:
             break
 
-        most_freq_pair, _ = max(pair_freq.items(), key=lambda k: (k[1], k[0]))
+        most_freq_pair, _ = max(pair_freq.items(), key=lambda k: (k[1], tuple(vocab[i] for i in k[0])))
 
         # merge!
         merge_index = len(vocab)
-        print(most_freq_pair)
-        merge_bytes = most_freq_pair[0] + most_freq_pair[1]
+        merge_bytes = vocab[most_freq_pair[0]] + vocab[most_freq_pair[1]]
         vocab[len(vocab)] = merge_bytes
-        merges.append(most_freq_pair)
+        merges.append((vocab[most_freq_pair[0]], vocab[most_freq_pair[1]]))
         # update pretokens
         to_update = pair_to_pt[most_freq_pair].copy()
         for oldpt in to_update:
