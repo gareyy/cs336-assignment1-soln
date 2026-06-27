@@ -160,6 +160,7 @@ def merge_new_token(oldpt: tuple[bytes], old_pair: tuple[bytes, bytes], newtoken
 class Tokeniser:
     def __init__(self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None):
         self.vocab = vocab
+        self.opposite_vocab = {v: k for k, v in vocab.items()}
         self.merges = merges
         self.special_tokens = special_tokens
         if special_tokens:
@@ -178,7 +179,10 @@ class Tokeniser:
             return []
         if self.special_tokens and text in self.special_tokens:
             return [self.spectok_map[text.encode("utf-8")]]
+
+        # TODO: diff idea: dont use the karparthy method, instead just find the vocab with the largest overlap in a given token
         tokens = tuple(text.encode("utf-8"))
+
         while len(tokens) >= 2:
             pairs = [(tokens[i], tokens[i+1]) for i in range(len(tokens) - 1)]
             lowest_pair = pairs[0]
@@ -230,13 +234,3 @@ def files_to_vocab_merges(vocab_filepath: str, merges_filepath: str) -> tuple[di
         merges = pickle.load(f)
     return vocab, merges
 
-if __name__ == "__main__":
-    #voc, mer = train_bpe("../data/TinyStoriesV2-GPT4-valid.txt", 10000, ["<|endoftext|>"])
-    #bpe_to_file(voc, "tinystories_voc", mer, "tinystories_mer")
-    #work = "<|endoftext|>cock and🍆🍆 balls<|endoftext|>🔥🔥cock and ass<|endoftext|>"
-    #work = "<|endoftext|>\n<|endoftext|>\n\n\n"
-    work = "\n<|endoftext|>\n<|endoftext|>\n\n\nasshole\n\n"
-    a = tokeniser.encode(work)
-    york = tokeniser.decode(a)
-    assert york.encode() == work.encode()
-    print("great success")
