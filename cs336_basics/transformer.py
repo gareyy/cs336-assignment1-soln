@@ -51,3 +51,56 @@ class SwiGLU(nn.Module):
         silu_result = one * torch.sigmoid(one)
         two = torch.mul(silu_result, self.W3(x))
         return self.W2(two)
+
+class RotaryPositionalEmbedding(nn.Module):
+    cos: torch.Tensor # max_seq_len, half_d_k
+    sin: torch.Tensor # max_seq_len, half_d_k
+
+    def __init__(self, theta: float, d_k:int, max_seq_len: int, device= None):
+        super().__init__()
+        thetas = torch.einsum("i, t -> i t", torch.arange(max_seq_len), torch.pow(theta, -torch.arange(0, d_k, 2) / d_k))
+        # create \theta_{i,k} = \frac{i}{\Theta^{(2k-2)/d_k}}
+
+        cos = torch.cos(thetas).to(device)
+        sin = torch.sin(thetas).to(device)
+        # precalculate cos and sin
+
+        self.register_buffer("cos", cos, persistent=False)
+        self.register_buffer("sin", sin, persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positons: torch.Tensor) -> torch.Tensor:
+        x_even = x[..., ::2]
+        x_odd = x[..., 1::2]
+
+        tokcos = self.cos[token_positons] # get specific cos and sin results
+        toksin = self.sin[token_positons]
+
+        result = torch.empty_like(x)
+
+        result[..., ::2] = x_even * tokcos - x_odd * toksin
+        result[..., 1::2] = x_even * toksin + x_odd * tokcos
+        # for each pair of tokens x1 and x2, apply rotation matrix to it and get rotated pair
+        return result
+
+def softmax(x: torch.Tensor, i: int):
+    z = x - torch.amax(x, dim=i, keepdim=True)
+    exp_z = torch.exp(z)
+    sum_exp = torch.sum(exp_z, dim=i, keepdim=True)
+    return exp_z/sum_exp
+
+def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    # Q and K is (batch_size, ..., seq_len, d_k)
+    # V is (batch_size, ..., seq_len, d_v)
+    # Q is n long, K and V are m long
+    # mask is nxm
+    d_k = Q.shape[-1]
+
+    presoftmax = torch.matmul(Q, K.transpose(-2, -1)) / sqrt(d_k)
+
+    if mask is not None:
+        # to apply mask, compare each i,jth element in presoftmax with mask, if its false, replace with -infinity
+        presoftmax = presoftmax + torch.where(mask, 0.0, float('-inf'))
+
+    after_softmax = softmax(presoftmax, i=-1)
+
+    return torch.matmul(after_softmax, V)
