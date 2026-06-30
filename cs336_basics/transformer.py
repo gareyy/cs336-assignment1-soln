@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from math import sqrt, ceil
+from einops import rearrange
 
 class Linear(nn.Module):
     def __init__(self, in_features: int, out_features: int, device: torch.device | None = None, dtype: torch.dtype | None = None):
@@ -95,7 +96,8 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
     # mask is nxm
     d_k = Q.shape[-1]
 
-    presoftmax = torch.matmul(Q, K.transpose(-2, -1)) / sqrt(d_k)
+    #presoftmax = torch.matmul(Q, K.transpose(-2, -1)) / sqrt(d_k)
+    presoftmax = torch.einsum("... q d, ... k d -> ... q k", Q, K) / sqrt(d_k)
 
     if mask is not None:
         # to apply mask, compare each i,jth element in presoftmax with mask, if its false, replace with -infinity
@@ -104,3 +106,102 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
     after_softmax = softmax(presoftmax, i=-1)
 
     return torch.matmul(after_softmax, V)
+
+class CausalMultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, device: torch.device | None = None, dtype: torch.dtype | None = None, pos_encoder: RotaryPositionalEmbedding | None = None) -> None:
+        super().__init__()
+
+        assert d_model % num_heads == 0
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model // num_heads
+        self.d_v = d_model // num_heads
+        self.pos_encoder = pos_encoder
+        self.device = device
+        self.dtype = dtype
+
+        self.postok_to_query = Linear(self.d_model, self.num_heads * self.d_k, device, dtype)
+        self.postok_to_key = Linear(self.d_model, self.num_heads * self.d_k, device, dtype)
+        self.postok_to_value = Linear(self.d_model, self.num_heads * self.d_v, device, dtype)
+
+        self.output_projector = Linear(self.num_heads * self.d_v, self.d_model, device, dtype)
+
+    def forward(self, x: torch.Tensor, token_positons: torch.Tensor | None = None) -> torch.Tensor:
+        *batch_dims, seq_len, d_model = x.size()
+
+        Q = self.postok_to_query(x)
+        K = self.postok_to_key(x)
+        V = self.postok_to_value(x)
+
+        # head splitting
+        Qh = rearrange(Q, "... seq_len (h d) -> ... h seq_len d", h=self.num_heads)
+        Kh = rearrange(K, "... seq_len (h d) -> ... h seq_len d", h=self.num_heads)
+        Vh = rearrange(V, "... seq_len (h d) -> ... h seq_len d", h=self.num_heads)
+
+        if self.pos_encoder is not None and token_positons is not None:
+            # apply RoPE (if available) to query and key
+            Qh = self.pos_encoder(Qh, token_positons)
+            Kh = self.pos_encoder(Kh, token_positons)
+
+        # mask for causal attention (do not do attention on future tokens)
+        iota = torch.arange(seq_len, device=x.device)
+        qi = rearrange(iota, "query -> query 1")
+        kj = rearrange(iota, "k -> 1 k")
+        mask = qi >= kj
+        mask = mask.__getitem__((None,) * len(batch_dims) + (...,))
+
+        # do attention
+        outH = scaled_dot_product_attention(Qh, Kh, Vh, mask)
+
+        # then put result through output MLP
+        out = rearrange(outH, "... h seq_len d -> ... seq_len (h d)")
+        return self.output_projector(out)
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, max_seq_len: int, theta: float, device: torch.device | None = None, dtype: torch.dtype | None = None) -> None:
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        self.max_seq_len = max_seq_len
+        self.theta = theta
+        self.device = device
+        self.dtype = dtype
+
+        self.norm1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.norm2 = RMSNorm(d_model, device=device, dtype=dtype)
+
+        self.swiglu = SwiGLU(d_model, d_ff, device=device, dtype=dtype)
+        self.rope = RotaryPositionalEmbedding(theta, d_model // num_heads, max_seq_len)
+        self.attention = CausalMultiHeadSelfAttention(d_model, num_heads, pos_encoder=self.rope, device=device, dtype=dtype)
+
+        self.token_positons = torch.arange(max_seq_len, device=device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        n1 = self.norm1(x)                
+        mha = self.attention(n1, self.token_positons[: x.shape[-2]])
+        add1 = x + mha
+
+        n2 = self.norm2(add1)
+        sg = self.swiglu(n2)
+        return sg + add1
+
+class TransformerLanguageModel(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, theta: float, vocab_size: int, context_length: int, num_layers: int, device: torch.device | None = None, dtype: torch.dtype | None = None) -> None:
+        super().__init__()
+        self.token_embedding = Embedding(vocab_size, d_model, device, dtype)
+        self.final_norm = RMSNorm(d_model, device=device, dtype=dtype)
+        self.output_embedding = Linear(d_model, vocab_size, device, dtype)
+        self.layers = nn.ModuleList(
+                [
+                    TransformerBlock(d_model, num_heads, d_ff, context_length, theta, device, dtype)
+                     for _ in range(num_layers)
+                     ]
+                )
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        x = self.token_embedding(tokens)
+        for block in self.layers:
+            x = block(x)
+        return self.output_embedding(self.final_norm(x))

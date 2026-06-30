@@ -150,7 +150,12 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    cmhsa = transformer.CausalMultiHeadSelfAttention(d_model, num_heads, device=in_features.device, dtype=in_features.dtype)
+    cmhsa.postok_to_query.W.data = q_proj_weight
+    cmhsa.postok_to_key.W.data = k_proj_weight
+    cmhsa.postok_to_value.W.data = v_proj_weight
+    cmhsa.output_projector.W.data = o_proj_weight
+    return cmhsa(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -190,7 +195,13 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    cmhsa = transformer.CausalMultiHeadSelfAttention(d_model, num_heads, device=in_features.device, dtype=in_features.dtype, 
+                                                     pos_encoder=transformer.RotaryPositionalEmbedding(theta, d_model // num_heads, max_seq_len, device=in_features.device))
+    cmhsa.postok_to_query.W.data = q_proj_weight
+    cmhsa.postok_to_key.W.data = k_proj_weight
+    cmhsa.postok_to_value.W.data = v_proj_weight
+    cmhsa.output_projector.W.data = o_proj_weight
+    return cmhsa(in_features, token_positions)
 
 
 def run_rope(
@@ -286,8 +297,18 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
-
+    block = transformer.TransformerBlock(d_model, num_heads, d_ff, max_seq_len, theta)
+    with torch.no_grad():
+        block.attention.postok_to_query.W.data = weights['attn.q_proj.weight']
+        block.attention.postok_to_key.W.data = weights['attn.k_proj.weight']
+        block.attention.postok_to_value.W.data = weights['attn.v_proj.weight']
+        block.attention.output_projector.W.data = weights['attn.output_proj.weight']
+        block.norm1.gain.data = weights['ln1.weight']
+        block.norm2.gain.data = weights['ln2.weight']
+        block.swiglu.W1.W.data = weights['ffn.w1.weight']
+        block.swiglu.W2.W.data = weights['ffn.w2.weight']
+        block.swiglu.W3.W.data = weights['ffn.w3.weight']
+    return block(in_features)
 
 def run_transformer_lm(
     vocab_size: int,
@@ -368,7 +389,22 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    lm = transformer.TransformerLanguageModel(d_model, num_heads, d_ff, rope_theta, vocab_size, context_length, num_layers, in_indices.device, torch.float32)
+    with torch.no_grad():
+        lm.token_embedding.embeds.data = weights['token_embeddings.weight']
+        lm.final_norm.gain.data = weights['ln_final.weight']
+        lm.output_embedding.W.data = weights['lm_head.weight']
+        for i, block in enumerate(lm.layers):
+            block.attention.postok_to_query.W.data = weights[f'layers.{i}.attn.q_proj.weight']
+            block.attention.postok_to_key.W.data = weights[f'layers.{i}.attn.k_proj.weight']
+            block.attention.postok_to_value.W.data = weights[f'layers.{i}.attn.v_proj.weight']
+            block.attention.output_projector.W.data = weights[f'layers.{i}.attn.output_proj.weight']
+            block.norm1.gain.data = weights[f'layers.{i}.ln1.weight']
+            block.norm2.gain.data = weights[f'layers.{i}.ln2.weight']
+            block.swiglu.W1.W.data = weights[f'layers.{i}.ffn.w1.weight']
+            block.swiglu.W2.W.data = weights[f'layers.{i}.ffn.w2.weight']
+            block.swiglu.W3.W.data = weights[f'layers.{i}.ffn.w3.weight']
+    return lm(in_indices)
 
 
 def run_rmsnorm(
