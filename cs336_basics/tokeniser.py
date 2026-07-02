@@ -144,7 +144,7 @@ def train_bpe(input_path: str | os.PathLike, vocab_size: int, special_tokens: li
 
     return vocab, merges
 
-def merge_new_token(oldpt: tuple[bytes], old_pair: tuple[bytes, bytes], newtoken: int) -> tuple[bytes]:
+def merge_new_token(oldpt: list[int], old_pair: tuple[bytes, bytes], newtoken: int) -> tuple[int]:
     newpt = []
     i = 0
     while i < len(oldpt):
@@ -164,10 +164,12 @@ class Tokeniser:
         self.merges = merges
         self.special_tokens = special_tokens
         if special_tokens:
-            for st in special_tokens:
+            special_tokens_sorted = sorted(special_tokens, key=lambda x: -len(x))
+            self.special_tokens = special_tokens_sorted
+            for st in special_tokens_sorted:
                 if st.encode("utf-8", "replace") not in self.vocab.values():
                     self.vocab[len(self.vocab)] = st.encode()
-            self.spectok_map = {st: tok for tok, st in self.vocab.items() if st.decode("utf-8", "replace") in special_tokens}
+            self.spectok_map = {st: tok for tok, st in self.vocab.items() if st.decode("utf-8", "replace") in special_tokens_sorted}
 
     @classmethod
     def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None):
@@ -180,8 +182,17 @@ class Tokeniser:
         if self.special_tokens and text in self.special_tokens:
             return [self.spectok_map[text.encode("utf-8")]]
 
-        # TODO: diff idea: dont use the karparthy method, instead just find the vocab with the largest overlap in a given token
-        tokens = tuple(text.encode("utf-8"))
+        tokens = []
+        pretokens = re.findall(PAT, text)
+        for pt in pretokens:
+            pt_utf8 = pt.encode("utf-8")
+            if pt_utf8 in self.opposite_vocab.keys():
+                tokens.append(self.opposite_vocab[pt_utf8])
+            else:
+                for char in pt:
+                    for i in tuple(char.encode("utf-8")):
+                        newtok = self.opposite_vocab[i.to_bytes()]
+                        tokens.append(newtok)
 
         while len(tokens) >= 2:
             pairs = [(tokens[i], tokens[i+1]) for i in range(len(tokens) - 1)]
@@ -233,4 +244,3 @@ def files_to_vocab_merges(vocab_filepath: str, merges_filepath: str) -> tuple[di
     with open(merges_filepath, "rb") as f:
         merges = pickle.load(f)
     return vocab, merges
-
