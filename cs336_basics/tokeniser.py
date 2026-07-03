@@ -1,3 +1,4 @@
+from functools import lru_cache
 import os
 from typing import BinaryIO, Iterable, Iterator
 import regex as re
@@ -185,14 +186,21 @@ class Tokeniser:
         tokens = []
         pretokens = re.findall(PAT, text)
         for pt in pretokens:
-            pt_utf8 = pt.encode("utf-8")
-            if pt_utf8 in self.opposite_vocab.keys():
-                tokens.append(self.opposite_vocab[pt_utf8])
-            else:
-                for char in pt:
-                    for i in tuple(char.encode("utf-8")):
-                        newtok = self.opposite_vocab[i.to_bytes()]
-                        tokens.append(newtok)
+            tokens.extend(self.encode_pretoken(pt))
+        return tokens
+    
+    @lru_cache
+    def encode_pretoken(self, pretoken: str) -> list[int]:
+        tokens = []
+        pt_utf8 = pretoken.encode("utf-8")
+        if pt_utf8 in self.opposite_vocab.keys():
+            tokens.append(self.opposite_vocab[pt_utf8])
+            return tokens
+        else:
+            for char in pretoken:
+                for i in tuple(char.encode("utf-8")):
+                    newtok = self.opposite_vocab[i.to_bytes()]
+                    tokens.append(newtok)
 
         while len(tokens) >= 2:
             pairs = [(tokens[i], tokens[i+1]) for i in range(len(tokens) - 1)]
