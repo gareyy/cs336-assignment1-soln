@@ -1,5 +1,5 @@
-from math import sqrt
-from typing import Callable, Optional
+from math import cos, pi, sqrt
+from typing import Callable, Iterable, Optional
 import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
@@ -42,5 +42,27 @@ class AdamW(torch.optim.Optimizer):
                 state['v'] = b2 * state.get('v', torch.zeros_like(param)) + (1-b2)*(grad**2)
                 param.data -= a_t * (state['m'])/(torch.sqrt(state['v']) + eps)
                 state['t'] = t + 1
-                
         return loss
+
+def learning_rate_schedule(iteration: int, max_lr: float, min_lr: float, warmup_iters: int, cosine_cycle_iters: int) -> float:
+    if iteration < warmup_iters:
+        # warm up
+        return (iteration/warmup_iters)*max_lr
+    elif warmup_iters <= iteration and iteration <= cosine_cycle_iters:
+        # cosine
+        return min_lr + 0.5 * (1 + cos((iteration - warmup_iters)/(cosine_cycle_iters-warmup_iters) * pi))*(max_lr-min_lr)
+    else:
+        return min_lr
+
+def grad_clip(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps: float = 1e-6):
+    norm = 0.0
+    for param in parameters:
+        if param.grad is not None:
+            norm += (param.grad**2).sum()
+    norm = sqrt(norm)
+    if norm < max_l2_norm:
+        return
+    clip_coef = max_l2_norm / (norm + eps)
+    for param in parameters:
+        if param.grad is not None:
+            param.grad *= clip_coef
