@@ -2,6 +2,7 @@ from math import cos, pi, sqrt
 from typing import Callable, Iterable, Optional
 import torch
 import torch.nn as nn
+from numpy.typing import NDArray
 from jaxtyping import Float, Int
 from torch import Tensor
 from torch.optim.optimizer import ParamsT
@@ -66,3 +67,6 @@ def grad_clip(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps:
     for param in parameters:
         if param.grad is not None:
             param.grad *= clip_coef
+
+def get_batch(dataset: NDArray, batch_size: int, context_length: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
+    pass

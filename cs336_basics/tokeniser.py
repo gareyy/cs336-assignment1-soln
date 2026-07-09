@@ -231,6 +231,19 @@ class Tokeniser:
         pieces = re.split("(" + "|".join([re.escape(p) for p in self.special_tokens]) + ")", text)
         processed_pieces = [self.encode_without_special(p) for p in pieces]
         return list(itertools.chain(*processed_pieces))
+    
+    def estimate_pretoken_count(self, text:str) -> int:
+        if self.special_tokens:
+            pt_sum = 0
+            pieces = re.split("(" + "|".join([re.escape(p) for p in self.special_tokens]) + ")", text)
+            for p in pieces:
+                if p in self.special_tokens:
+                    pt_sum += 1
+                    continue
+                pt_sum += len(re.findall(PAT, p))
+            return pt_sum
+        else:
+            return len(re.findall(PAT, text))
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         for text in iterable:
