@@ -1,11 +1,17 @@
 from math import cos, pi, sqrt
-from typing import Callable, Iterable, Optional
+from typing import IO, BinaryIO, Callable, Iterable, Optional
 import torch
 import torch.nn as nn
 from numpy.typing import NDArray
+import numpy as np
 from jaxtyping import Float, Int
 from torch import Tensor
 from torch.optim.optimizer import ParamsT
+import os
+
+MODEL_DICT = "MODEL_DICT"
+OPTIM_DICT = "OPTIM_DICT"
+ITERATION = "ITERATION"
 
 def cross_entropy_loss(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
     stabilised = inputs - torch.amax(inputs, dim=-1, keepdim=True)
@@ -69,4 +75,30 @@ def grad_clip(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps:
             param.grad *= clip_coef
 
 def get_batch(dataset: NDArray, batch_size: int, context_length: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
-    pass
+    indexes = np.random.randint(dataset.shape[0]-context_length, size=batch_size)
+    x = torch.stack([
+            torch.from_numpy(dataset[i : i + context_length]) for i in indexes
+        ])
+    y = torch.stack([
+            torch.from_numpy(dataset[i +1: i + 1 +context_length]) for i in indexes
+        ])
+    if "cuda" in device:
+        x.pin_memory().to(device)
+        y.pin_memory().to(device)
+    else:
+        x.to(device)
+        y.to(device)
+    return x, y
+
+def save_checkpoint(model: nn.Module, optimiser: torch.optim.Optimizer, iteration: int, out : str | os.PathLike | BinaryIO | IO[bytes]):
+    model_dict = model.state_dict()
+    optim_dict = optimiser.state_dict()
+    output_obj = {MODEL_DICT: model_dict, OPTIM_DICT: optim_dict, ITERATION: iteration}
+    torch.save(output_obj, out)
+
+def load_checkpoint(model: nn.Module, optimiser: torch.optim.Optimizer, src : str | os.PathLike | BinaryIO | IO[bytes]) -> int:
+    load_dict = torch.load(src)
+    iteration = load_dict[ITERATION]
+    model.load_state_dict(load_dict[MODEL_DICT])
+    optimiser.load_state_dict(load_dict[OPTIM_DICT])
+    return iteration
