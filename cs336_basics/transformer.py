@@ -83,10 +83,10 @@ class RotaryPositionalEmbedding(nn.Module):
         # for each pair of tokens x1 and x2, apply rotation matrix to it and get rotated pair
         return result
 
-def softmax(x: torch.Tensor, i: int):
-    z = x - torch.amax(x, dim=i, keepdim=True)
+def softmax(x: torch.Tensor, dim: int):
+    z = x - torch.amax(x, dim=dim, keepdim=True)
     exp_z = torch.exp(z)
-    sum_exp = torch.sum(exp_z, dim=i, keepdim=True)
+    sum_exp = torch.sum(exp_z, dim=dim, keepdim=True)
     return exp_z/sum_exp
 
 def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
@@ -103,7 +103,7 @@ def scaled_dot_product_attention(Q: torch.Tensor, K: torch.Tensor, V: torch.Tens
         # to apply mask, compare each i,jth element in presoftmax with mask, if its false, replace with -infinity
         presoftmax = presoftmax + torch.where(mask, 0.0, float('-inf'))
 
-    after_softmax = softmax(presoftmax, i=-1)
+    after_softmax = softmax(presoftmax, dim=-1)
 
     return torch.matmul(after_softmax, V)
 

@@ -102,4 +102,3 @@ def load_checkpoint(model: nn.Module, optimiser: torch.optim.Optimizer, src : st
     model.load_state_dict(load_dict[MODEL_DICT])
     optimiser.load_state_dict(load_dict[OPTIM_DICT])
     return iteration
-

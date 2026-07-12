@@ -35,7 +35,6 @@ import tqdm
 ENCODED_TRAIN = "tinystories_encoded_train"
 ENCODED_VALID = "tinystories_encoded_valid"
 
-
 D_MODEL = 512
 NUM_HEADS = 16
 ROPE_THETA = 10000
