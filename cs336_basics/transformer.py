@@ -205,3 +205,6 @@ class TransformerLanguageModel(nn.Module):
         for block in self.layers:
             x = block(x)
         return self.output_embedding(self.final_norm(x))
+    
+    def get_parameter_count(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

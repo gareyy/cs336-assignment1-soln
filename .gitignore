@@ -164,3 +164,7 @@ cython_debug/
 data/
 /cs336_basics/tinystories_voc
 /cs336_basics/tinystories_mer
+/cs336_basics/tinystories_encoded
+/cs336_basics/tinystories_encoded_valid
+/cs336_basics/tinystories_encoded_train
+*.ckpt

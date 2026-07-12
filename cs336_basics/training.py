@@ -1,104 +1,132 @@
-from math import cos, pi, sqrt
-from typing import IO, BinaryIO, Callable, Iterable, Optional
+"""
+training steps
+- set torch and numpy random seeds
+- load memory mapped datasets (data, validation)
+- create model and move to target device
+- create optimiser
+- check existence of checkpoint, if so, resume from checkpoint
+    - this means we get optimser, model, and iteration data
+- for each iteration, starting from the current iteration to the max step count
+    - update learning rate wrt schedule, and update it in the optimiser
+    - sample a batch xb, yb of training data
+    - forward pass
+        - sample logits from passing xb through model
+        - output is BATCH x CONTEXT_LENGTH x VOCAB_SIZE
+    - calculate loss using cross entropy
+    - set optimiser zero grad to true (clear gradients to prevent gradient accumulation)
+    - backpropogation (loss.backward)
+    - clip gradients for stability
+    - do optmiser step (parameter update)
+    - every so often, log training loss, learning rate
+    - every so often, log validation loss, learning rate
+        - do this by sampling batches xvb, yvb from validation data, run them through cross entropy, and get the loss from it
+        - be sure to set model.eval() before validation forward passes, and model.train() afterwards
+        - if this beats the current best valid loss, checkpoint it
+    - every so often, save checkpoint
+- save checkpoint
+"""
 import torch
-import torch.nn as nn
-from numpy.typing import NDArray
 import numpy as np
-from jaxtyping import Float, Int
-from torch import Tensor
-from torch.optim.optimizer import ParamsT
+import transformer, training_utils
+from einops import rearrange
 import os
+import tqdm
 
-MODEL_DICT = "MODEL_DICT"
-OPTIM_DICT = "OPTIM_DICT"
-ITERATION = "ITERATION"
+ENCODED_TRAIN = "tinystories_encoded_train"
+ENCODED_VALID = "tinystories_encoded_valid"
 
-def cross_entropy_loss(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
-    stabilised = inputs - torch.amax(inputs, dim=-1, keepdim=True)
-    chosens = torch.gather(stabilised, -1, targets.unsqueeze(-1))
-    under = torch.logsumexp(stabilised, dim=-1, keepdim=True)
-    batches = - (chosens - under)
-    # thank https://jaykmody.com/blog/stable-softmax/ for this
-    return torch.mean(batches)
 
-class AdamW(torch.optim.Optimizer):
-    def __init__(self, params: ParamsT, lr: float = 0.001, betas: tuple[float, float] = (0.9, 0.999), weight_decay: float = 0.01, eps=1e-8) -> None:
-        if lr < 0:
-            raise ValueError(f"Invalid learning rate: {lr}")
-        defaults = {"lr": lr, "betas": betas, "reg": weight_decay, "eps": eps}
-        super().__init__(params, defaults)
+D_MODEL = 512
+NUM_HEADS = 16
+ROPE_THETA = 10000
+D_FF = 512
+VOCAB_SIZE = 10000 # tinystories vocab
+CONTEXT_LENGTH = 512
+NUM_LAYERS = 3
+DEVICE = torch.get_default_device()
+MODEL_DTYPE = torch.float32
 
-    def step(self, closure: Optional[Callable] = None) -> float | None:
-        loss = None if closure is None else closure()
-        for group in self.param_groups:
-            lr = group['lr']
-            b1, b2 = group['betas']
-            reg = group['reg']
-            eps = group['eps']
-            for param in group['params']:
-                if param.grad is None:
-                    continue
-                # use state to store moment estimates m and v, along with time t
-                state = self.state[param]
-                t = state.get('t', 1)
-                grad = param.grad.data
-                a_t = lr * (sqrt(1-(b2**t))/(1-(b1**t)))
-                
-                param.data -= lr * reg * param.data
-                state['m'] = b1 * state.get('m', torch.zeros_like(param)) + (1-b1)*grad
-                state['v'] = b2 * state.get('v', torch.zeros_like(param)) + (1-b2)*(grad**2)
-                param.data -= a_t * (state['m'])/(torch.sqrt(state['v']) + eps)
-                state['t'] = t + 1
-        return loss
+LR = 0.001
+BETAS = (0.9, 0.999)
+WEIGHT_DECAY = 0.01
+EPS = 1e-8
 
-def learning_rate_schedule(iteration: int, max_lr: float, min_lr: float, warmup_iters: int, cosine_cycle_iters: int) -> float:
-    if iteration < warmup_iters:
-        # warm up
-        return (iteration/warmup_iters)*max_lr
-    elif warmup_iters <= iteration and iteration <= cosine_cycle_iters:
-        # cosine
-        return min_lr + 0.5 * (1 + cos((iteration - warmup_iters)/(cosine_cycle_iters-warmup_iters) * pi))*(max_lr-min_lr)
+MAX_ITERATIONS = 1000
+
+LR_MIN = 1e-4
+LR_MAX = 1e-3
+WARMUP_ITERS = int(MAX_ITERATIONS * 0.2)
+COSINE_CYCLE_ITERS = int(MAX_ITERATIONS * 0.8)
+
+BATCH_SIZE = 16
+
+GRAD_CLIP = 1.0
+GRAD_EPS = 1e-6
+
+RESUME_MODEL_CHECKPOINT_FILENAME = "resumemodel.ckpt"
+BEST_MODEL_CHECKPOINT_FILENAME = "bestmodel.ckpt"
+
+VALID_LOSS_EVERY = 50
+TRAIN_LOSS_EVERY = 50
+CHECKPOINT_EVERY = 25
+
+def main():
+    torch.manual_seed(67)
+    np.random.seed(67)
+
+    train_data = np.load(ENCODED_TRAIN, mmap_mode="r")
+    valid_data = np.load(ENCODED_VALID, mmap_mode="r")
+
+    model = transformer.TransformerLanguageModel(D_MODEL, NUM_HEADS, D_FF, ROPE_THETA, VOCAB_SIZE, CONTEXT_LENGTH, NUM_LAYERS, DEVICE, MODEL_DTYPE)
+    model.to(DEVICE)
+    print(f"NUM PARAMETERS: {model.get_parameter_count()}")
+    optimiser = training_utils.AdamW(model.parameters(), LR, BETAS, WEIGHT_DECAY, EPS)
+
+    start_iter = 0
+    if os.path.exists(RESUME_MODEL_CHECKPOINT_FILENAME):
+        start_iter = training_utils.load_checkpoint(model, optimiser, RESUME_MODEL_CHECKPOINT_FILENAME)
+        print(f"RESUMING FROM ITER {start_iter+1}/{MAX_ITERATIONS}")
     else:
-        return min_lr
+        print("STARTING NEW...")
+    
+    best_valid_loss = float("inf")
+    for iteration in tqdm.tqdm(range(start_iter, MAX_ITERATIONS)):
+        curr_lr = training_utils.learning_rate_schedule(iteration, LR_MAX, LR_MIN, WARMUP_ITERS, COSINE_CYCLE_ITERS)
+        for group in optimiser.param_groups:
+            group['lr'] = curr_lr
 
-def grad_clip(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float, eps: float = 1e-6):
-    norm = 0.0
-    for param in parameters:
-        if param.grad is not None:
-            norm += (param.grad**2).sum()
-    norm = sqrt(norm)
-    if norm < max_l2_norm:
-        return
-    clip_coef = max_l2_norm / (norm + eps)
-    for param in parameters:
-        if param.grad is not None:
-            param.grad *= clip_coef
+        input_batch, target_batch = training_utils.get_batch(train_data, BATCH_SIZE, CONTEXT_LENGTH, DEVICE.__str__())
+        logits = model(input_batch)
+        ce_target = rearrange(target_batch, "... batch context -> ... (batch context)")
+        ce_logits = rearrange(logits, "... batch context vocab -> ... (batch context) vocab")
+        loss = training_utils.cross_entropy_loss(ce_logits, ce_target)
 
-def get_batch(dataset: NDArray, batch_size: int, context_length: int, device: str) -> tuple[torch.Tensor, torch.Tensor]:
-    indexes = np.random.randint(dataset.shape[0]-context_length, size=batch_size)
-    x = torch.stack([
-            torch.from_numpy(dataset[i : i + context_length]) for i in indexes
-        ])
-    y = torch.stack([
-            torch.from_numpy(dataset[i +1: i + 1 +context_length]) for i in indexes
-        ])
-    if "cuda" in device:
-        x.pin_memory().to(device)
-        y.pin_memory().to(device)
-    else:
-        x.to(device)
-        y.to(device)
-    return x, y
+        optimiser.zero_grad()
+        loss.backward()
 
-def save_checkpoint(model: nn.Module, optimiser: torch.optim.Optimizer, iteration: int, out : str | os.PathLike | BinaryIO | IO[bytes]):
-    model_dict = model.state_dict()
-    optim_dict = optimiser.state_dict()
-    output_obj = {MODEL_DICT: model_dict, OPTIM_DICT: optim_dict, ITERATION: iteration}
-    torch.save(output_obj, out)
+        if GRAD_CLIP > 0:
+            training_utils.grad_clip(model.parameters(), GRAD_CLIP, GRAD_EPS)
+        
+        optimiser.step()
+        if iteration % TRAIN_LOSS_EVERY == 0:
+            print(f"Train Loss at iteration {iteration+1}: {loss.item()}")
+        if iteration % VALID_LOSS_EVERY == 0:
+            model.eval()
+            input_batch, target_batch = training_utils.get_batch(valid_data, BATCH_SIZE, CONTEXT_LENGTH, DEVICE.__str__())
+            logits = model(input_batch)
+            ce_target = rearrange(target_batch, "... batch context -> ... (batch context)")
+            ce_logits = rearrange(logits, "... batch context vocab -> ... (batch context) vocab")
+            valid_loss = training_utils.cross_entropy_loss(ce_logits, ce_target)
+            model.train()
+            print(f"Validation Loss at iteration {iteration+1}: {valid_loss.item()}")
+            if valid_loss.item() < best_valid_loss:
+                best_valid_loss = valid_loss.item()
+                training_utils.save_checkpoint(model, optimiser, iteration, BEST_MODEL_CHECKPOINT_FILENAME)
+        if iteration % CHECKPOINT_EVERY == 0:
+            print(f"Checkpointed at {iteration+1}/{MAX_ITERATIONS}")
+            training_utils.save_checkpoint(model, optimiser, iteration, RESUME_MODEL_CHECKPOINT_FILENAME)
 
-def load_checkpoint(model: nn.Module, optimiser: torch.optim.Optimizer, src : str | os.PathLike | BinaryIO | IO[bytes]) -> int:
-    load_dict = torch.load(src)
-    iteration = load_dict[ITERATION]
-    model.load_state_dict(load_dict[MODEL_DICT])
-    optimiser.load_state_dict(load_dict[OPTIM_DICT])
-    return iteration
+    training_utils.save_checkpoint(model, optimiser, MAX_ITERATIONS, RESUME_MODEL_CHECKPOINT_FILENAME)
+
+if __name__ == "__main__":
+    main()

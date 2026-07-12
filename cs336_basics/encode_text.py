@@ -62,9 +62,9 @@ def file_to_token_npz(tok: tokeniser.Tokeniser, input_p: os.PathLike | str, outp
 
 if __name__ == "__main__":
     tok = tokeniser.Tokeniser.from_files("tinystories_voc", "tinystories_mer", ["<|endoftext|>"])
-    INPUT = "/home/wumeno/Documents/cs336-assignment1-soln/data/TinyStoriesV2-GPT4-train.txt"
-    #INPUT = "/home/wumeno/Documents/cs336-assignment1-soln/data/TinyStoriesV2-GPT4-valid.txt"
-    ENCODED = "tinystories_encodedvalid"
+    #INPUT = "/home/wumeno/Documents/cs336-assignment1-soln/data/TinyStoriesV2-GPT4-train.txt"
+    INPUT = "/home/wumeno/Documents/cs336-assignment1-soln/data/TinyStoriesV2-GPT4-valid.txt"
+    ENCODED = "tinystories_encoded_valid"
     file_to_token_npz(tok, INPUT, ENCODED)
     """
     with open(ENCODED, "rb") as f:
